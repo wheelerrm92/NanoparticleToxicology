@@ -1,0 +1,499 @@
+---
+title: "Meta-Analysis Notebook"
+output:
+  html_notebook: default
+  pdf_document: default
+---
+
+The notebook is a documentation of the R code that I have written thus far in a way that the scripts are live and I can write and see the code next to one another. Ctrl+Alt+I creates a new block of code to be run. 
+
+The first step is to get all of the tools and the header loaded and or created
+```{r}
+library(metafor)
+library(xlsx)
+setwd("C:\\Users\\Robert\\Box Sync\\Data\\Bondarenko\\RData")
+
+T2est<-list('REML')
+subsetterms<-list('~coating', '~timecat', '~timecont')
+Conflevel<-95/100
+cleanedoutMedium<-read.csv(file="CleanedDataFinal.csv",header=FALSE)
+cleanedinMedium<-read.csv(file="CleanedDataMediumFinal.csv",header=FALSE)
+pointestimates<-data.frame()
+```
+
+Next I define all of the functions that do the majority of the analysis
+```{r}
+##Making Functions
+addSecondaryData<-function(dataset,cleaned){
+    dataset[,"chemistry"]<-factor(cleaned[,1][dataset[,1]])
+    dataset[,"organism"]<-factor(cleaned[,6][dataset[,1]])
+    dataset[,"size"]<-(cleaned[,3][dataset[,1]])#Can use to thest the difference between part/L and sized^3 term
+    dataset[,"timecont"]<-(cleaned[,14][dataset[,1]])#time
+    dataset[,"timecat"]<-factor(cleaned[,15][dataset[,1]])
+    colnames(dataset)[8]<-"coating"
+    dataset[,"coating"]<-as.factor(dataset[,"coating"])
+    dataset
+}
+generatePointEstimateTable<-function(dataset, T2, m, j, k){
+    pointestimates<-data.frame()
+    count=1
+    for(i in seq(2,6,2)){
+        a<-rma(yi=log10(data.matrix(dataset[i])), vi=(1/log(10)*(data.matrix(dataset[i+1])))^2,data = dataset, method=T2)
+        pointestimates[count,'mean']=a$beta[1]
+        pointestimates[count,'standard error']=a$se[1]
+        pointestimates[count,'Prediction Interval']=qt((1-(1-Conflevel)/2),a$k-2)*(a$tau2[1]+a$se[1]^2)^(1/2)
+        pointestimates[count,'Number Samples']=a$k
+        pointestimates[count,'T2 estimate']=(a$tau2[1])^(1/2)
+        pointestimates[count,'H2']=a$H2[1]
+        pointestimates[count,'Q']=a$QE[1]
+        pointestimates[count,'T2']=m
+        pointestimates[count,'chemistry']=j
+        pointestimates[count,'organism']=k
+        pointestimates[count,'AICc']=a$fit.stats[5,'ML']
+        pointestimates[count,'BIC']=a$fit.stats[4,'ML']
+        
+        count=count+1
+
+    }
+    return(pointestimates)
+}
+
+
+RunandSubset<-function(dataset, T2est){
+    generatedStatistics<-data.frame()
+    for(j in seq(1,5,1)){
+        for(k in seq(1,27,1)){
+            if(sum(dataset$chemistry==j & dataset$organism==k)>=4){
+                datasetsubset<-subset(dataset, dataset$chemistry==j & dataset$organism==k)
+                for(m in seq(1,length(T2est),1)){
+                    holding<-generatePointEstimateTable(datasetsubset, T2est[m], m,j,k)
+                    generatedStatistics<-rbind(generatedStatistics, holding)
+                }
+            }
+        }
+
+    }
+    return(generatedStatistics)
+}
+
+Subsetandregress<-function(dataset, regressionterms){
+    count=1
+    generatedStatistics<-data.frame()
+    for(i in seq(2,6,2)){
+        for(j in seq(1,5,1)){
+            for(k in seq(1,27,1)){
+                if(sum(dataset$chemistry==j & dataset$organism==k)>=4){
+                    datasetsubset<-subset(dataset, dataset$chemistry==j & dataset$organism==k)
+                    for(m in seq(1,length(regressionterms),1)){
+                        regressed<-rma(yi=log10(data.matrix(datasetsubset[i])), vi=(1/log(10)*(data.matrix(datasetsubset[i+1])))^2,data = datasetsubset, method='REML',mods=as.formula(as.character(regressionterms[m])))
+                        
+                        generatedStatistics[count,'Model']<-regressionterms[m]
+                        generatedStatistics[count,'Units']<-i/2
+                        generatedStatistics[count,'AICc']<-regressed$fit.stats[5,'ML']
+                        generatedStatistics[count,'BIC']<-regressed$fit.stats[4,'ML']
+                        if(is.null(regressed$R2)){
+                            generatedStatistics[count,'R2']<-2
+                        }else{
+                            generatedStatistics[count,'R2']<-regressed$R2    
+                        }
+                        generatedStatistics[count,'H2']<-regressed$H2
+                        generatedStatistics[count,'Q']<-regressed$QE
+                        generatedStatistics[count,'chemistry']=j
+                        generatedStatistics[count,'organism']=k
+                        generatedStatistics[count,'test']=regressed$k
+                        count=count+1
+                    }
+                }
+            }
+
+        }
+    }
+    return(generatedStatistics)
+}
+
+```
+
+Complete Case Analysis OTM
+```{r}
+##Outside of testmedium measurements
+CompleteCase<-read.csv(file="OTMComp.csv",header=FALSE)
+CompleteCase<-addSecondaryData(CompleteCase, cleanedoutMedium)
+StatsCompletecase<-RunandSubset(CompleteCase,T2est)
+StatsCompletecaser<-Subsetandregress(CompleteCase, subsetterms)
+```
+
+Incomplete Case Analysis OTM
+```{r}
+InCompleteCase<-read.csv(file="OTMIncomp.csv",header=FALSE)
+InCompleteCase<-addSecondaryData(InCompleteCase, cleanedoutMedium)
+StatsInCompletecase<-RunandSubset(InCompleteCase,T2est)
+StatsInCompletecaser<-Subsetandregress(InCompleteCase, subsetterms)
+
+```
+
+Complete Case Analysis ITM
+```{r}
+CompleteCaseMedium<-read.csv(file="ITMComp.csv",header=FALSE)
+CompleteCaseMedium<-addSecondaryData(CompleteCaseMedium, cleanedinMedium)
+StatsCompleteCaseMedium<-RunandSubset(CompleteCaseMedium,T2est)
+StatsCompleteCaseMediumr<-Subsetandregress(CompleteCaseMedium, subsetterms)
+```
+
+incomplete Case Analysis ITM
+```{r}
+InCompleteCaseMedium<-read.csv(file="ITMIncomp.csv",header=FALSE)
+InCompleteCaseMedium<-addSecondaryData(InCompleteCaseMedium, cleanedinMedium)
+StatsInCompleteCaseMedium<-RunandSubset(InCompleteCaseMedium,T2est)
+StatsInCompleteCaseMediumr<-Subsetandregress(InCompleteCaseMedium, subsetterms)
+```
+
+The errors from above are due to redundant predicotrs, ie no change acorss coatig or time and so the model was not run more correctly is probably the same as the mean
+
+The Next step is to round up all the incomplete data and see if there is a global model
+First Compling the data
+```{r}
+##Combined in and out of medium data
+InCompleteCase[,'medium']<-1
+InCompleteCaseMedium[,'medium']<-2
+IncComb<-rbind(InCompleteCase,InCompleteCaseMedium)
+IncComb[,'medium']<-as.factor(IncComb[,'medium'])
+i=2
+Modelstotest<-list('~chemistry','~organism','~medium', '~coating', '~chemistry+organism+medium+coating', '~chemistry+organism+medium',
+                   '~chemistry+medium+coating', '~organism+medium+coating', '~chemistry+organism', '~chemistry+medium', '~chemistry+coating',
+                   '~organism+medium', '~organism+coating', '~medium+coating')
+count=1
+Statsroundup<-data.frame()
+```
+
+RUn the Analysis for gpl, after removing duplicate gpl data !duplicated pulls the records that were not duplicated in the results
+```{r}
+for(m in seq(1,length(Modelstotest),1)){
+        b2<-rma(yi=log10(data.matrix(IncComb[!duplicated(IncComb$V1),2])), vi=(1/log(10)*(data.matrix(IncComb[!duplicated(IncComb$V1),3])))^2,data = IncComb[!duplicated(IncComb$V1),], method="REML", mods=as.formula(as.character(Modelstotest[m])))
+        Statsroundup[count,'Model']<-Modelstotest[m]
+        Statsroundup[count,'Units']<-i/2
+        Statsroundup[count,'AICc']<-b2$fit.stats[5,'ML']
+        Statsroundup[count,'BIC']<-b2$fit.stats[4,'ML']
+        Statsroundup[count,'R2']<-b2$R2
+        Statsroundup[count,'H2']<-b2$H2
+        Statsroundup[count,'Q']<-b2$QE
+        count=count+1
+    }
+
+```
+PPL and SAPL Data
+```{r}
+for(i in seq(4,6,2)){
+    for(m in seq(1,length(Modelstotest),1)){
+        b2<-rma(yi=log10(data.matrix(IncComb[i])), vi=(1/log(10)*(data.matrix(IncComb[i+1])))^2,data = IncComb, method="REML", mods=as.formula(as.character(Modelstotest[m])))
+        Statsroundup[count,'Model']<-Modelstotest[m]
+        Statsroundup[count,'Units']<-i/2
+        Statsroundup[count,'AICc']<-b2$fit.stats[5,'ML']
+        Statsroundup[count,'BIC']<-b2$fit.stats[4,'ML']
+        Statsroundup[count,'R2']<-b2$R2
+        Statsroundup[count,'H2']<-b2$H2
+        Statsroundup[count,'Q']<-b2$QE
+        count=count+1
+    }
+}
+
+
+
+```
+Incomplete CaseTotal Estimate
+```{r}
+totalgplmean<-(IncComb[!duplicated(IncComb$V1),])
+totalgplmeanstats<-RunandSubset(totalgplmean,T2est)
+totalgplmeanstats
+```
+
+Complete merged data gplmean
+```{r}
+
+CompleteCase[,'medium']<-1
+CompleteCaseMedium[,'medium']<-2
+TotalComb<-rbind(CompleteCase,CompleteCaseMedium)
+TotalComb[,'medium']<-as.factor(TotalComb[,'medium'])
+CompTotalgpldata<-(TotalComb[!duplicated(TotalComb$V1),])
+CompTotalgpldatastats<-RunandSubset(CompTotalgpldata,T2est)
+CompTotalgpldatastats
+
+
+
+
+```
+
+
+
+
+% writing the code to a csv file 
+```{r}
+# write.xlsx(StatsCompletecase, file = "meanStatistics.xlsx", sheetName="StatsCompletecase",row.names=FALSE)
+# write.xlsx(StatsInCompletecase, file = "meanStatistics.xlsx", sheetName="StatsInCompletecase",append=TRUE,row.names=FALSE)
+# write.xlsx(StatsCompleteCaseMedium, file = "meanStatistics.xlsx", sheetName="StatsCompleteCaseMedium",append=TRUE,row.names=FALSE)
+# write.xlsx(StatsInCompleteCaseMedium, file = "meanStatistics.xlsx", sheetName="StatsInCompleteCaseMedium",append=TRUE,row.names=FALSE)
+# write.xlsx(StatsCompletecaser, file = "meanStatistics.xlsx", sheetName="StatsCompletecaser",append=TRUE,row.names=FALSE)
+# write.xlsx(StatsInCompletecaser, file = "meanStatistics.xlsx", sheetName="StatsInCompletecaser",append=TRUE,row.names=FALSE)
+# write.xlsx(StatsCompleteCaseMediumr, file = "meanStatistics.xlsx", sheetName="StatsCompleteCaseMediumr",append=TRUE,row.names=FALSE)
+# write.xlsx(StatsInCompleteCaseMediumr, file = "meanStatistics.xlsx", sheetName="StatsInCompleteCaseMediumr",append=TRUE,row.names=FALSE)
+# write.xlsx(Statsroundup, file = "meanStatistics.xlsx", sheetName="Statsroundup",append=TRUE,row.names=FALSE)
+```
+
+
+
+Determining the number of studies in the data set for each chemistry organism combo 
+```{r}
+count=1
+PairswithNumb<-data.frame()
+for(chemistry in unique(cleanedoutMedium$V1)){
+    for(organism in unique(cleanedoutMedium$V6)){
+        PairswithNumb[count, 'Chemistry']<- chemistry
+        PairswithNumb[count,'Organism']<- organism
+        PairswithNumb[count, 'NumbRecords']<-dim(cleanedoutMedium[cleanedoutMedium$V1==chemistry & cleanedoutMedium$V6==organism,])[1]
+        PairswithNumb[count, 'Complete OTM']<-dim(CompleteCase[CompleteCase$chemistry==chemistry & CompleteCase$organism==organism,])[1]
+        PairswithNumb[count, 'Incomplete OTM']<-dim(InCompleteCase[InCompleteCase$chemistry==chemistry & InCompleteCase$organism==organism,])[1]
+        PairswithNumb[count, 'Complete ITM']<-dim(CompleteCaseMedium[CompleteCaseMedium$chemistry==chemistry & CompleteCaseMedium$organism==organism,])[1]
+        PairswithNumb[count, 'Incomplete ITM']<-dim(InCompleteCaseMedium[InCompleteCaseMedium$chemistry==chemistry & InCompleteCaseMedium$organism==organism,])[1]
+        count=count+1
+    }
+}
+    
+PairswithNumb[PairswithNumb$NumbRecords!=0 & PairswithNumb$`Complete OTM`!=0  | PairswithNumb$`Incomplete OTM`!=0 | PairswithNumb$`Complete ITM`!=0 | PairswithNumb$`Incomplete ITM`!=0,]
+```
+Should limit the above based on EC50Data
+
+
+Complete Case analysis forest plots 2,23
+```{r}
+Unitlist<-list('(g/L)', '(Part/L)', '(SA/L)')
+subsettedCompleteCase<-subset(CompleteCase,CompleteCase$chemistry==2 &CompleteCase$organism==23)
+for(i in seq(2,6,2)){
+    a<-rma(yi=log10(data.matrix(subsettedCompleteCase[i])), vi=(1/log(10)*(data.matrix(subsettedCompleteCase[i+1])))^2,data = subsettedCompleteCase, method='REML')
+    
+    forest(a)
+    title(paste('Size measured out of Medium',Unitlist[i/2]))
+}
+holding<-cumul.rma.uni(a)
+forest(holding)
+```
+Anotations for above plot: 3 outlying points in SAPL are from the same study, each has different coatings, could be organismal or a poor study?
+
+
+Complete Case analysis forest plots 1,1 ITM
+```{r}
+subsettedCompleteCaseMedium<-subset(CompleteCaseMedium,CompleteCaseMedium$chemistry==1 &CompleteCaseMedium$organism==1)
+for(i in seq(2,6,2)){
+    a<-rma(yi=log10(data.matrix(subsettedCompleteCaseMedium[i])), vi=(1/log(10)*(data.matrix(subsettedCompleteCaseMedium[i+1])))^2,data = subsettedCompleteCaseMedium, method='REML')
+    
+    forest(a)
+    title(paste('Size measured in Medium',Unitlist[i/2]))
+}
+```
+
+Complete Case analysis forest plots 2,1 OTM
+```{r}
+subsettedCompleteCaseMedium<-subset(CompleteCaseMedium,CompleteCaseMedium$chemistry==2 &CompleteCaseMedium$organism==1)
+for(i in seq(2,6,2)){
+    a<-rma(yi=log10(data.matrix(subsettedCompleteCaseMedium[i])), vi=(1/log(10)*(data.matrix(subsettedCompleteCaseMedium[i+1])))^2,data = subsettedCompleteCaseMedium, method='REML')
+    
+    forest(a)
+    title(paste('Size measured in Medium',Unitlist[i/2]))
+}
+```
+
+
+Incomplete Case Analysis Forest plots 2,23
+```{r}
+subsettedinCompleteCase<-subset(InCompleteCase,InCompleteCase$chemistry==2 & InCompleteCase$organism==23)
+ for(i in seq(2,6,2)){
+    a<-rma(yi=log10(data.matrix(subsettedinCompleteCase[i])), vi=(1/log(10)*(data.matrix(subsettedinCompleteCase[i+1])))^2,data = subsettedinCompleteCase, method='REML')
+    
+    forest(a)
+    title(paste('Size measured out of Medium',Unitlist[i/2]))
+}
+```
+
+Changes in RSD for 2,23 .2 SAPL .6 greater at min
+
+```{r}
+
+boxplot((subsettedCompleteCase$V5-subsettedCompleteCase$V3))
+
+boxplot(((subsettedCompleteCase$V5-subsettedCompleteCase$V3)/subsettedCompleteCase$V3))
+
+```
+
+
+Excluding outliers from 2,23 case
+```{r}
+subsettedinCompleteCaseoutiers<-subset(subsettedinCompleteCase,subsettedinCompleteCase$V1!=984 & subsettedinCompleteCase$V1!=985 & subsettedinCompleteCase$V1!=986)
+StatsInCompleteCaseoutliers<-RunandSubset(subsettedinCompleteCaseoutiers,T2est)
+StatsInCompleteCaseoutliers
+```
+```{r}
+subsettedCompleteCaseoutiers<-subset(subsettedCompleteCase,subsettedCompleteCase$V1!=984 & subsettedCompleteCase$V1!=985 & subsettedCompleteCase$V1!=986)
+StatsCompleteCaseoutliers<-RunandSubset(subsettedCompleteCaseoutiers,T2est)
+StatsCompleteCaseoutliers
+```
+
+
+Bondarkenko Papper Median Results 
+
+```{r}
+BondChem<-c('Ag','Ag', 'ZnO', 'ZnO', 'CuO', 'CuO')
+BondOrg<-c('Crust', 'Bact','Crust', 'Bact','Crust', 'Bact')
+Bondmedian<-log10(c(.1,7.1,2.3,500,2.1,200)/1000)
+medianBond<-data.frame(BondChem,BondOrg, Bondmedian)
+medianBond
+
+```
+
+
+
+
+The Rest of the code I could add but seems to be mostly test code for secondary projects
+```{r}
+
+# 
+# 
+# # CompleteCaseMedium<-read.csv(file="ShapeAccountCompMedium.csv",header=FALSE)
+# # CompleteCaseMedium<-addSecondaryData(CompleteCaseMedium)
+# # dataset=CompleteCaseMedium
+# # a<-rma(yi=log10(data.matrix(dataset[i])), vi=(1/log(10)*(data.matrix(dataset[i+1])))^2,data = dataset, method='REML')
+# 
+# 
+# ## How Assumption Effects Complete Case
+# Compmean<-function(mean1,SE1, n1, mean2,SE2, n2){
+#     SEcomb<-sqrt(SE1^2/n1+SE2^2/n2)
+#     ttestsstat<-(mean1-mean2)/SEcomb
+#     dfcomb<-n1+n2-2
+#     critT<-qt(1-0.05/2, dfcomb)
+#     if(abs(ttestsstat)>critT){
+#         meanssame<-0
+#     }
+#     else{
+#         meanssame<-1
+#     }
+#     return(cbind(ttestsstat,meanssame,(mean1-mean2),SEcomb,critT))
+# }
+# 
+# ActAssumStats<-data.frame()
+# MediumCom<-data.frame()
+# ActAssumStatsMed<-data.frame()
+# Incompletecompare<-data.frame()
+# IncompleteCompareMed<-data.frame()
+# for(i in seq(1,3,1)) {
+#     ActAssumStats<-rbind(ActAssumStats,Compmean(StatsCompletecase[i,1],StatsCompletecase[i,2],StatsCompletecase[i,4],
+#                                                 StatsCompleteCaseActAssum[i,1],StatsCompleteCaseActAssum[i,2],StatsCompleteCaseActAssum[i,4]))
+#     MediumCom<-rbind(MediumCom,Compmean(
+#         StatsCompleteCaseMedium[i,1],StatsCompleteCaseMedium[i,2],StatsCompleteCaseMedium[i,4],
+#         StatsCompletecase[i,1],StatsCompletecase[i,2],StatsCompletecase[i,4]))
+#     ActAssumStatsMed<-rbind(ActAssumStatsMed,Compmean(StatsCompleteCaseMedium[i,1],StatsCompleteCaseMedium[i,2],StatsCompleteCaseMedium[i,4],
+#                                                       StatsCompleteCaseActAssumMedium[i,1],StatsCompleteCaseActAssumMedium[i,2],StatsCompleteCaseActAssumMedium[i,4]))
+#     subsettedincomplete<-subset(StatsInCompletecase,StatsInCompletecase$chemistry==2 &StatsInCompletecase$organism==23)
+#     subsettedincomplete1<-subsettedincomplete
+#     Incompletecompare<-rbind(Incompletecompare,Compmean(StatsCompletecase[i,1],StatsCompletecase[i,2],StatsCompletecase[i,4],
+#                                                         subsettedincomplete[i,1],subsettedincomplete[i,2],subsettedincomplete[i,4]))
+#     subsettedincomplete<-subset(StatsInCompleteCaseMedium,StatsInCompleteCaseMedium$chemistry==2 &StatsInCompleteCaseMedium$organism==23)
+#     Incompletecompare<-rbind(Incompletecompare,Compmean(StatsCompleteCaseMedium[i,1],StatsCompleteCaseMedium[i,2],StatsCompleteCaseMedium[i,4],
+#                                                         subsettedincomplete[i,1],subsettedincomplete[i,2],subsettedincomplete[i,4]))
+#     IncompleteCompareMed<-rbind(IncompleteCompareMed,Compmean(subsettedincomplete1[i,1],subsettedincomplete1[i,2],subsettedincomplete1[i,4],
+#                                                            subsettedincomplete[i,1],subsettedincomplete[i,2],subsettedincomplete[i,4]))
+# 
+# 
+# }
+# 
+# 
+# ### Generating Figures
+# Unitlist<-list('(g/L)', '(Part/L)', '(SA/L)')
+# for(i in seq(2,6,2)){
+#     a<-rma(yi=log10(data.matrix(CompleteCase[i])), vi=(1/log(10)*(data.matrix(CompleteCase[i+1])))^2,data = CompleteCase, method='REML')
+#     
+#     forest(a)
+#     title(paste('Size measured out of  Medium',Unitlist[i/2]))
+# }
+# 
+# 
+# subsettedCompleteCaseMedium<-subset(CompleteCaseMedium,CompleteCaseMedium$chemistry==2 &CompleteCaseMedium$organism==23)
+# for(i in seq(2,6,2)){
+#     a<-rma(yi=log10(data.matrix(subsettedCompleteCaseMedium[i])), vi=(1/log(10)*(data.matrix(subsettedCompleteCaseMedium[i+1])))^2,data = subsettedCompleteCaseMedium, method='REML')
+#     
+#     forest(a)
+#     title(paste('Size measured in Medium',Unitlist[i/2]))
+# }
+# 
+# i=2
+# OTMgLcoating<-rma(yi=log10(data.matrix(CompleteCase[i])), vi=(1/log(10)*(data.matrix(CompleteCase[i+1])))^2,data = CompleteCase, method='REML', 
+#                    mods = ~coating-1)
+# ITMgLcoating<-rma(yi=log10(data.matrix(subsettedCompleteCaseMedium[i])), vi=(1/log(10)*(data.matrix(subsettedCompleteCaseMedium[i+1])))^2,data = subsettedCompleteCaseMedium, method='REML',
+#                    mods = ~coating-1)
+# unique(CompleteCase$coating)
+# unique(subsettedCompleteCaseMedium$coating)
+# 
+# 
+# 
+# 
+# OTMmeans<-list()
+# OTMstderror<-list()
+# OTMTdata<-list()
+# OTMHdata<-list()
+# OTMQdata<-list()
+# ITMmeans<-list()
+# ITMstderror<-list()
+# ITMTdata<-list()
+# ITMHdata<-list()
+# ITMQdata<-list()
+# subsettedCompleteCaseMedium<-subset(CompleteCaseMedium,CompleteCaseMedium$chemistry==2 &CompleteCaseMedium$organism==23)
+# for(i in seq(2,6,2)){
+#     OTMgLcoating<-rma(yi=log10(data.matrix(CompleteCase[i])), vi=(1/log(10)*(data.matrix(CompleteCase[i+1])))^2,data = CompleteCase, method='REML', 
+#                       mods = ~coating-1)
+#     ITMgLcoating<-rma(yi=log10(data.matrix(subsettedCompleteCaseMedium[i])), vi=(1/log(10)*(data.matrix(subsettedCompleteCaseMedium[i+1])))^2,data = subsettedCompleteCaseMedium, method='REML',
+#                       mods = ~coating-1)
+#     OTMmeans<-cbind(OTMmeans,OTMgLcoating$b)
+#     OTMstderror<-cbind(OTMstderror,OTMgLcoating$se)
+#     OTMTdata<-cbind(OTMTdata, sqrt(OTMgLcoating$tau2))
+#     OTMHdata<-cbind(OTMHdata, sqrt(OTMgLcoating$H2))
+#     OTMQdata<-cbind(OTMQdata, OTMgLcoating$QE)
+#     ITMmeans<-cbind(ITMmeans,ITMgLcoating$b)
+#     ITMstderror<-cbind(ITMstderror,ITMgLcoating$se)
+#     ITMTdata<-cbind(ITMTdata, sqrt(ITMgLcoating$tau2))
+#     ITMHdata<-cbind(ITMHdata, sqrt(ITMgLcoating$H2))
+#     ITMQdata<-cbind(ITMQdata, ITMgLcoating$QE)
+#     
+#     
+# }
+# 
+# ##Subset means
+# OTMsubset<-data.frame()
+# ITMsubset<-data.frame()
+# holding<-data.frame()
+# for(i in seq(1,8,1)){
+#     
+#     subsettedCompleteCaseMedium<-subset(CompleteCaseMedium,CompleteCaseMedium$chemistry==2 &CompleteCaseMedium$organism==23 &CompleteCaseMedium$coating==i)
+#     if (length(subsettedCompleteCaseMedium)>1) {
+#         holding<-RunandSubset(subsettedCompleteCaseMedium,T2est)
+#         ITMsubset<-rbind(ITMsubset, holding)
+#     }
+#     
+#     subsettedCompleteCase<-subset(CompleteCase,CompleteCase$chemistry==2 &CompleteCase$organism==23 & CompleteCase$coating==i)
+#     if (length(subsettedCompleteCase)>2) {
+#         
+#         holding<-RunandSubset(subsettedCompleteCase, T2est)
+#         OTMsubset<-rbind(OTMsubset, holding)
+#         
+#     }
+#     
+# }
+# 
+# 
+# ##Cumulative
+# subsettedCompleteCaseMedium<-subset(CompleteCaseMedium,CompleteCaseMedium$chemistry==2 &CompleteCaseMedium$organism==23)
+# subsettedCompleteCase<-subset(CompleteCase,CompleteCase$chemistry==2 &CompleteCase$organism==23 &CompleteCase$coating!=4)
+# i=2
+# OTMgLCum<-rma(yi=log10(data.matrix(subsettedCompleteCase[i])), vi=(1/log(10)*(data.matrix(subsettedCompleteCase[i+1])))^2,data = subsettedCompleteCase, method='REML')
+# ITMgLCum<-rma(yi=log10(data.matrix(subsettedCompleteCaseMedium[i])), vi=(1/log(10)*(data.matrix(subsettedCompleteCaseMedium[i+1])))^2,data = subsettedCompleteCaseMedium, method='REML')
+# ITMCumul<-cumul(ITMgLCum)
+# OTMCumul<-cumul(OTMgLCum)
+
+```
+
+  
